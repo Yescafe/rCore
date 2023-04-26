@@ -1,6 +1,6 @@
 //! The panic handler
 
-use crate::sbi::shutdown;
+use crate::{sbi::shutdown, stack_trace};
 use core::panic::PanicInfo;
 use log::*;
 
@@ -16,5 +16,8 @@ fn panic(info: &PanicInfo) -> ! {
     } else {
         error!("[kernel] Panicked: {}", info.message().unwrap());
     }
+
+    unsafe { stack_trace::print_stack_trace(); }
+
     shutdown(true)
 }

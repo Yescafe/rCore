@@ -2,9 +2,11 @@
 
 use crate::sbi::shutdown;
 use crate::sync::UPSafeCell;
+use crate::syscall;
 use crate::trap::TrapContext;
 use core::arch::asm;
 use lazy_static::*;
+use riscv::register::time;
 
 const USER_STACK_SIZE: usize = 4096 * 2;
 const KERNEL_STACK_SIZE: usize = 4096 * 2;
@@ -48,10 +50,15 @@ impl UserStack {
     }
 }
 
-struct AppManager {
+fn get_time() -> usize {
+    time::read()
+}
+
+pub struct AppManager {
     num_app: usize,
     current_app: usize,
     app_start: [usize; MAX_APP_NUM + 1],
+    pub app_start_time: usize,
 }
 
 impl AppManager {
@@ -67,7 +74,8 @@ impl AppManager {
         }
     }
 
-    unsafe fn load_app(&self, app_id: usize) {
+    unsafe fn load_app(&mut self, app_id: usize) {
+        self.app_start_time = get_time();
         if app_id >= self.num_app {
             println!("All applications completed!");
             shutdown(false);
@@ -99,8 +107,24 @@ impl AppManager {
     }
 }
 
+pub struct Counter {
+    pub c: [usize; 4]
+}
+
+impl Counter {
+    pub fn count(&mut self, syscall_id: usize) {
+        match syscall_id {
+            syscall::SYSCALL_WRITE => self.c[0] += 1,
+            syscall::SYSCALL_EXIT => self.c[1] += 1,
+            syscall::SYSCALL_GET_TASKINFO => self.c[2] += 1,
+            syscall::SYSCALL_STAT => self.c[3] += 1,
+            _ => panic!("Error syscall id"),
+        }
+    }
+}
+
 lazy_static! {
-    static ref APP_MANAGER: UPSafeCell<AppManager> = unsafe {
+    pub static ref APP_MANAGER: UPSafeCell<AppManager> = unsafe {
         UPSafeCell::new({
             extern "C" {
                 fn _num_app();
@@ -115,6 +139,15 @@ lazy_static! {
                 num_app,
                 current_app: 0,
                 app_start,
+                app_start_time: get_time(),
+            }
+        })
+    };
+
+    pub static ref SYSCALL_COUNTER: UPSafeCell<Counter> = unsafe {
+        UPSafeCell::new({
+            Counter {
+                c: [0, 0, 0, 0],
             }
         })
     };
@@ -133,6 +166,10 @@ pub fn print_app_info() {
 /// run next app
 pub fn run_next_app() -> ! {
     let mut app_manager = APP_MANAGER.exclusive_access();
+
+    let delta = get_time() - app_manager.app_start_time;
+    println!("Task finished in {} tick{}", delta, if delta == 1 { "" } else { "s" });
+
     let current_app = app_manager.get_current_app();
     unsafe {
         app_manager.load_app(current_app);
